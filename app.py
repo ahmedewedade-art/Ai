@@ -1,95 +1,91 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+import os
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import pypdf
-import os
 import requests
-import time
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# جلب مفتاح الـ API بشكل آمن ومخفي (يدعم الطريقتين بالشرطة السفلية لمنع أخطاء المسافات في السيرفر)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("Gemini_API_KEY") or ""
 
-# 🔒 حماية أمنية: قراءة المفتاح من خوادم الاستضافة مباشرة لحمايته من السرقة
-Gemini_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6KkCirQdSS2qoeR9Tap6jx0FyRX0ZWYnyBdOD0dOQENfQ")
+# نموذج مرن لاستقبال الأسئلة من واجهة المستخدم بأي صيغة أرستلها
+class ChatRequest(BaseModel):
+    message: str = None
+    question: str = None
+    prompt: str = None
 
-def auto_fix_workspace():
-    if not os.path.exists("pdfs"):
-        os.makedirs("pdfs")
-    for file_name in os.listdir("."):
-        if file_name.endswith(".pdf"):
-            try:
-                os.rename(file_name, os.path.join("pdfs", file_name))
-            except Exception:
-                pass
-
-auto_fix_workspace()
-
-def extract_text_from_all_pdfs(folder_path: str) -> str:
+def load_all_pdfs():
+    """قراءة واستخراج النصوص من جميع المحاضرات الطبية في مجلد pdfs"""
     combined_text = ""
-    if not os.path.exists(folder_path):
-        return ""
-    for file_name in os.listdir(folder_path):
-        if file_name.endswith('.pdf'):
-            file_path = os.path.join(folder_path, file_name)
-            try:
-                reader = pypdf.PdfReader(file_path)
-                for page in reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        combined_text += page_text + "\n"
-            except Exception:
-                pass
+    pdf_dir = "pdfs"
+    
+    if os.path.exists(pdf_dir):
+        for filename in sorted(os.listdir(pdf_dir)):
+            if filename.endswith(".pdf"):
+                file_path = os.path.join(pdf_dir, filename)
+                try:
+                    with open(file_path, "rb") as f:
+                        reader = pypdf.PdfReader(f)
+                        for page in reader.pages:
+                            text = page.extract_text()
+                            if text:
+                                combined_text += text + "\n"
+                except Exception as e:
+                    print(f"Error reading {filename}: {e}")
     return combined_text
 
-SYSTEM_INSTRUCTION = """
-CONSIGNES ULTRA-STRICTES DE L'ASSISTANT :
-- Tu t'appelles "Ahmed wedad", un assistant pédagogique d'IA, expert en Biophysique médicale (PCEM2), mais tu es surtout super sympa, drôle et tu as un sens de l'humour unique (دمك خفيف جداً ومرح).
-- Ta mission est de déstresser l'étudiant face à la biophysique en utilisant des blagues médicales et un ton ultra-encourageant.
-- Génère TOUJOURS tes QCMs exclusivement en FRANÇAIS médical rigoureux.
-- L'explication (الشرح المبهج) à l'intérieur de <details> doit être rédigée EN ARABE drôle, imagé, et plein d'humour.
-- Si l'étudiant te demande une explication directe en arabe, réponds-lui avec beaucoup d'humour et de métaphores simples en arabe.
-- FORMATAGE : N'utilise JAMAIS de markdown (pas de **, #, ou *). Utilise uniquement les balises HTML pures.
-"""
+# تحميل نصوص المحاضرات في الذاكرة عند تشغيل السيرفر لتسريع الاستجابة
+PDF_CONTEXT = load_all_pdfs()
 
-class AgentRequest(BaseModel):
-    query: str
-
-# 🌐 عرض واجهة المستخدم فوراً عند فتح رابط الموقع الرئيسي
-@app.get("/", response_class=HTMLResponse)
-async def serve_ui():
+@app.get("/")
+async def serve_index():
+    """عرض واجهة المستخدم الخاصة بالموقع"""
     if os.path.exists("index.html"):
-        with open("index.html", "r", encoding="utf-8") as f:
-            return f.read()
-    return "<h3>⚠️ ملف index.html غير موجود في المجلد الرئيسي!</h3>"
+        return FileResponse("index.html")
+    return {"error": "index.html file not found"}
 
 @app.post("/api/biophysique-agent")
-async def biophysique_agent(request: AgentRequest):
-    pdfs_folder = "pdfs"
-    context_text = extract_text_from_all_pdfs(pdfs_folder)
+async def biophysique_agent(request: ChatRequest):
+    """المسار الرئيسي لاستقبال أسئلة الطلاب والإجابة عليها بواسطة جيميناي"""
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API Key is missing on the server configuration.")
     
-    if not context_text.strip():
-        return {"response": "<div class='error-msg'>⚠️ Erreur : Aucun fichier PDF trouvé dans le dossier 'pdfs'.</div>"}
+    # تحديد السؤال القادم من الطلاب بغض النظر عن المسمى المرسل من الـ JavaScript
+    user_query = request.message or request.question or request.prompt
+    if not user_query:
+        raise HTTPException(status_code=400, detail="Message content cannot be empty.")
     
-    full_prompt = f"{SYSTEM_INSTRUCTION}\n\n---\n[CONTEXTE]:\n{context_text}\n\n---\n[DEMANDE]:\n{request.query}"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={Gemini_API_KEY}"
+    # صياغة البرومبت وتدعيمه بمحتوى المحاضرات (مع تحديد حد أقصى للنصوص لحماية حجم الطلب)
+    system_prompt = (
+        "أنت مساعد ذكي مخصص لمادة البيوفيزياء الطبيّة (Biophysique). "
+        "استعن بالسياق العلمي التالي المستخرج من محاضرات الطلاب للإجابة على سؤال الطالب بدقة وبأسلوب طبي تعليمي واضح:\n\n"
+        f"[المحاضرات الطبية]:\n{PDF_CONTEXT[:20000]}\n\n"
+        f"[سؤال الطالب]: {user_query}"
+    )
     
-    payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+    # إرسال الطلب لـ Gemini API عبر Requests
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": system_prompt}]
+            }
+        ]
+    }
     
-    for attempt in range(3):
-        try:
-            response = requests.post(url, json=payload)
-            if response.status_code == 200:
-                return {"response": response.json()['candidates'][0]['content']['parts'][0]['text']}
-            time.sleep(2)
-        except Exception as e:
-            if attempt == 2:
-                return {"response": f"<div class='error-msg'>⚠️ Erreur Connection : {str(e)}</div>"}
-    return {"response": "<div class='error-msg'>⚠️ Serveur surchargé, réessayez.</div>"}
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response_data = response.json()
+        
+        if response.status_code == 200:
+            ai_response = response_data['candidates'][0]['content']['parts'][0]['text']
+            return {"response": ai_response}
+        else:
+            error_msg = response_data.get("error", {}).get("message", "Unknown API Error")
+            raise HTTPException(status_code=response.status_code, detail=f"Gemini API Error: {error_msg}")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
