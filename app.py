@@ -1,20 +1,31 @@
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pypdf
 import requests
 
 app = FastAPI()
 
-# جلب مفتاح الـ API بشكل آمن ومخفي (يدعم الطريقتين بالشرطة السفلية لمنع أخطاء المسافات في السيرفر)
+# تفعيل نظام الـ CORS لضمان استقبال وإرسال البيانات بدون قيود للمتصفح
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# جلب مفتاح الـ API بشكل آمن ومخفي
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("Gemini_API_KEY") or ""
 
-# نموذج مرن لاستقبال الأسئلة من واجهة المستخدم بأي صيغة أرستلها
+# نموذج مرن جداً لاستقبال أي مسمى مرسل من واجهة الـ JavaScript لضمان عدم حدوث خطأ
 class ChatRequest(BaseModel):
     message: str = None
     question: str = None
     prompt: str = None
+    text: str = None
 
 def load_all_pdfs():
     """قراءة واستخراج النصوص من جميع المحاضرات الطبية في مجلد pdfs"""
@@ -36,7 +47,7 @@ def load_all_pdfs():
                     print(f"Error reading {filename}: {e}")
     return combined_text
 
-# تحميل نصوص المحاضرات في الذاكرة عند تشغيل السيرفر لتسريع الاستجابة
+# تحميل نصوص المحاضرات في الذاكرة
 PDF_CONTEXT = load_all_pdfs()
 
 @app.get("/")
@@ -52,12 +63,12 @@ async def biophysique_agent(request: ChatRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key is missing on the server configuration.")
     
-    # تحديد السؤال القادم من الطلاب بغض النظر عن المسمى المرسل من الـ JavaScript
-    user_query = request.message or request.question or request.prompt
+    # التقاط السؤال بأي صيغة كانت قادمة من الـ Front-end
+    user_query = request.message or request.question or request.prompt or request.text
     if not user_query:
         raise HTTPException(status_code=400, detail="Message content cannot be empty.")
     
-    # صياغة البرومبت وتدعيمه بمحتوى المحاضرات (مع تحديد حد أقصى للنصوص لحماية حجم الطلب)
+    # صياغة البرومبت المدعم بالمحاضرات الطبية للطلاب
     system_prompt = (
         "أنت مساعد ذكي مخصص لمادة البيوفيزياء الطبيّة (Biophysique). "
         "استعن بالسياق العلمي التالي المستخرج من محاضرات الطلاب للإجابة على سؤال الطالب بدقة وبأسلوب طبي تعليمي واضح:\n\n"
@@ -65,7 +76,6 @@ async def biophysique_agent(request: ChatRequest):
         f"[سؤال الطالب]: {user_query}"
     )
     
-    # إرسال الطلب لـ Gemini API عبر Requests
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -82,7 +92,14 @@ async def biophysique_agent(request: ChatRequest):
         
         if response.status_code == 200:
             ai_response = response_data['candidates'][0]['content']['parts'][0]['text']
-            return {"response": ai_response}
+            
+            # هنا السر: نرسل الإجابة بكل المسميات الممكنة التي قد يبحث عنها كود الـ JavaScript في صفحتك
+            return {
+                "response": ai_response,
+                "reply": ai_response,
+                "message": ai_response,
+                "text": ai_response
+            }
         else:
             error_msg = response_data.get("error", {}).get("message", "Unknown API Error")
             raise HTTPException(status_code=response.status_code, detail=f"Gemini API Error: {error_msg}")
