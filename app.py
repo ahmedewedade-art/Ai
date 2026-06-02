@@ -20,8 +20,9 @@ app.add_middleware(
 # جلب مفتاح الـ API بشكل آمن ومخفي
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("Gemini_API_KEY") or ""
 
-# نموذج مرن جداً لاستقبال أي مسمى مرسل من واجهة الـ JavaScript لضمان عدم حدوث خطأ
+# النموذج المرن المحدث لاستقبال مسمى query القادم من الـ JavaScript لديك
 class ChatRequest(BaseModel):
+    query: str = None
     message: str = None
     question: str = None
     prompt: str = None
@@ -63,8 +64,8 @@ async def biophysique_agent(request: ChatRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key is missing on the server configuration.")
     
-    # التقاط السؤال بأي صيغة كانت قادمة من الـ Front-end
-    user_query = request.message or request.question or request.prompt or request.text
+    # التقاط السؤال بناءً على التسمية المكتشفة في الـ JavaScript (query)
+    user_query = request.query or request.message or request.question or request.prompt or request.text
     if not user_query:
         raise HTTPException(status_code=400, detail="Message content cannot be empty.")
     
@@ -93,7 +94,7 @@ async def biophysique_agent(request: ChatRequest):
         if response.status_code == 200:
             ai_response = response_data['candidates'][0]['content']['parts'][0]['text']
             
-            # هنا السر: نرسل الإجابة بكل المسميات الممكنة التي قد يبحث عنها كود الـ JavaScript في صفحتك
+            # إرسال الإجابة بالصيغة المتوقعة في صفحتك (data.response)
             return {
                 "response": ai_response,
                 "reply": ai_response,
