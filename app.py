@@ -42,9 +42,11 @@ def load_all_pdfs():
 # تحميل نصوص المحاضرات في الذاكرة ليدعم بها الإجابات
 PDF_CONTEXT = load_all_pdfs()
 
-@app.get("/")
-async def serve_index():
-    """عرض واجهة المستخدم الحية"""
+@app.route("/", methods=["GET", "HEAD"])
+async def serve_index(request: Request):
+    """عرض واجهة المستخدم الحية ودعم فحص نظام ريندر الأمني"""
+    if request.method == "HEAD":
+        return FileResponse("index.html", media_type="text/html")
     if os.path.exists("index.html"):
         return FileResponse("index.html")
     return {"error": "index.html file not found"}
