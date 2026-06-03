@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import pypdf
 import requests
+import uvicorn
 
 app = FastAPI()
 
@@ -16,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔒 الأمان هنا: جلب المفتاح سرياً من إعدادات السيرفر وليس من الكود
+# 🔒 الأمان: جلب المفتاح سرياً من إعدادات السيرفر
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 def load_all_pdfs():
@@ -42,7 +43,7 @@ def load_all_pdfs():
 # تحميل نصوص المحاضرات في الذاكرة ليدعم بها الإجابات
 PDF_CONTEXT = load_all_pdfs()
 
-@app.route("/", methods=["GET", "HEAD"])
+@app.api_route("/", methods=["GET", "HEAD"])
 async def serve_index(request: Request):
     """عرض واجهة المستخدم الحية ودعم فحص نظام ريندر الأمني"""
     if request.method == "HEAD":
@@ -57,18 +58,15 @@ async def biophysique_agent(request: Request):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="Gemini API Key is missing on the server configuration.")
     
-    # قراءة البيانات القادمة من الواجهة
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON data")
         
-    # التقاط السؤال بناءً على مسمى (query) المرسل من الـ JavaScript لديك
     user_query = data.get("query") or data.get("message") or data.get("question")
     if not user_query:
         raise HTTPException(status_code=400, detail="Query content cannot be empty.")
     
-    # صياغة البرومبت المدعم بالمحاضرات الطبية للطلاب
     system_prompt = (
         "أنت مساعد ذكي مخصص لمادة البيوفيزياء الطبيّة (Biophysique) لمرحلة PCEM2. "
         "استعن بالسياق العلمي التالي المستخرج من محاضرات الطلاب للإجابة على سؤال الطالب بدقة وبأسلوب طبي تعليمي واضح:\n\n"
@@ -78,13 +76,7 @@ async def biophysique_agent(request: Request):
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": system_prompt}]
-            }
-        ]
-    }
+    payload = {"contents": [{"parts": [{"text": system_prompt}]}]}
     
     try:
         response = requests.post(url, json=payload, headers=headers)
@@ -92,15 +84,14 @@ async def biophysique_agent(request: Request):
         
         if response.status_code == 200:
             ai_response = response_data['candidates'][0]['content']['parts'][0]['text']
-            
-            # إرسال الإجابة بالصيغة التي تتوقعها واجهتك (data.response)
-            return {
-                "response": ai_response,
-                "reply": ai_response
-            }
+            return {"response": ai_response, "reply": ai_response}
         else:
             error_msg = response_data.get("error", {}).get("message", "Unknown API Error")
             raise HTTPException(status_code=response.status_code, detail=f"Gemini API Error: {error_msg}")
-            
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+# 🚀 الجزء الأهم: إجبار السيرفر على فتح الـ Port الذي يطلبه Render تلقائياً
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
