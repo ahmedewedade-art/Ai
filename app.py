@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import pypdf
 import requests
-import uvicorn
 
 app = FastAPI()
 
@@ -43,14 +42,17 @@ def load_all_pdfs():
 # تحميل نصوص المحاضرات في الذاكرة ليدعم بها الإجابات
 PDF_CONTEXT = load_all_pdfs()
 
-@app.api_route("/", methods=["GET", "HEAD"])
-async def serve_index(request: Request):
-    """عرض واجهة المستخدم الحية ودعم فحص نظام ريندر الأمني"""
-    if request.method == "HEAD":
-        return FileResponse("index.html", media_type="text/html")
+@app.get("/")
+async def serve_index():
+    """عرض واجهة المستخدم الحية"""
     if os.path.exists("index.html"):
         return FileResponse("index.html")
     return {"error": "index.html file not found"}
+
+@app.head("/")
+async def serve_index_head():
+    """دعم فحص نظام ريندر الأمني لعدم إغلاق السيرفر"""
+    return {"status": "ok"}
 
 @app.post("/api/biophysique-agent")
 async def biophysique_agent(request: Request):
@@ -70,7 +72,7 @@ async def biophysique_agent(request: Request):
     system_prompt = (
         "أنت مساعد ذكي مخصص لمادة البيوفيزياء الطبيّة (Biophysique) لمرحلة PCEM2. "
         "استعن بالسياق العلمي التالي المستخرج من محاضرات الطلاب للإجابة على سؤال الطالب بدقة وبأسلوب طبي تعليمي واضح:\n\n"
-        f"[المحاضرات الطبية]:\n{PDF_CONTEXT[:20000]}\n\n"
+        f"[المحاضرات الطبية]:\n{PDF_CONTEXT[:15000]}\n\n"
         f"[سؤال الطالب]: {user_query}"
     )
     
@@ -90,8 +92,3 @@ async def biophysique_agent(request: Request):
             raise HTTPException(status_code=response.status_code, detail=f"Gemini API Error: {error_msg}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-
-# 🚀 الجزء الأهم: إجبار السيرفر على فتح الـ Port الذي يطلبه Render تلقائياً
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
